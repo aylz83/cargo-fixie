@@ -24,7 +24,7 @@ This may already exist, but I couldn't find anything.
 ### Installation
 
 ```bash
-git clone https://www.github.com/aylz83/cargo-fixie
+git clone https://github.com/aylz83/cargo-fixie
 cd cargo-fixie && cargo install --path .
 ```
 
