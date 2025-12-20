@@ -15,7 +15,12 @@ fn main() -> anyhow::Result<()>
 
 	let (mut child, reader) = spawn_cargo_build()?;
 
-	let messages = parse_build_output(reader, cli.ignore_warnings)?;
+	let mut ignore_warnings = cli.ignore_warnings;
+
+	let mut messages = parse_build_output(reader)?;
+	let mut filtered_messages = filter_messages(&messages, ignore_warnings);
+
+	let (mut warnings, mut errors, mut others) = check_messages(&messages);
 
 	child.wait()?;
 
@@ -30,7 +35,7 @@ fn main() -> anyhow::Result<()>
 
 	loop
 	{
-		let message = &messages[index];
+		let message = &filtered_messages[index];
 		render_message(
 			&mut terminal,
 			&syntax_set,
@@ -38,16 +43,55 @@ fn main() -> anyhow::Result<()>
 			&cli.theme,
 			message,
 			index,
-			messages.len(),
+			filtered_messages.len(),
+			warnings,
+			errors,
+			others,
+			ignore_warnings,
 		)?;
 
-		match control_tui(index, messages.len())
+		match control_tui(index, filtered_messages.len())
 		{
-			Ok(Some(new_index)) => index = new_index,
-			Ok(None) => break,
+			Ok(Command::SwitchError(new_index)) => index = new_index,
+			Ok(Command::Quit) => break,
+			Ok(Command::IgnoreWarnings) =>
+			{
+				index = 0;
+				ignore_warnings = !ignore_warnings;
+				filtered_messages = filter_messages(&messages, ignore_warnings);
+
+				if filtered_messages.is_empty()
+				{
+					break;
+				}
+			}
+			Ok(Command::Rebuild) =>
+			{
+				index = 0;
+				let (mut new_child, new_reader) = spawn_cargo_build()?;
+				messages = parse_build_output(new_reader)?;
+				filtered_messages = filter_messages(&messages, ignore_warnings);
+				let (new_warnings, new_errors, new_others) = check_messages(&messages);
+
+				new_child.wait()?;
+				child = new_child;
+
+				warnings = new_warnings;
+				errors = new_errors;
+				others = new_others;
+
+				if filtered_messages.is_empty()
+				{
+					break;
+				}
+			}
+			Ok(Command::NoChange) =>
+			{}
 			Err(_) => break,
 		}
 	}
+
+	child.wait()?;
 
 	cleanup_tui(&mut terminal)?;
 

@@ -35,7 +35,7 @@ cd your_amazing_project
 cargo fixie # or cargo fixie --ignore-warnings
 ```
 
-Use Vim keys or arrow keys to cycle through errors. Q to quit.
+Use Vim keys or arrow keys to cycle through errors. r to rebuild. i to toggle hiding warnings. q to quit.
 
 ### Plans
 
@@ -43,6 +43,9 @@ Fixie is small, but has (also small) dreams.
 
 - [ ] Finish this README
 - [ ] Don't take up whole terminal window.
-- [ ] Cleaner terminal upon exit.
-- [ ] Summary of warning and error count.
-- [ ] Live ignore warnings toggle.
+- [X] Cleaner terminal upon exit.
+- [X] Summary of warning and error count.
+- [X] Live ignore warnings toggle.
+- [X] Live rebuild option.
+- [ ] Remember configuration
+- [ ] Per project configuration (.fixie.toml or something)

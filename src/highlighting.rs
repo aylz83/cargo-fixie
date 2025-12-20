@@ -1,5 +1,5 @@
-use tui::text::{Span, Spans};
-use tui::style::Color;
+use ratatui::text::{Line, Span};
+use ratatui::style::{Style, Color};
 
 use syntect::parsing::SyntaxSet;
 use syntect::highlighting::ThemeSet;
@@ -9,7 +9,7 @@ pub fn highlight_message(
 	syntax_set: &SyntaxSet,
 	theme_set: &ThemeSet,
 	theme: &String,
-) -> anyhow::Result<Vec<Spans<'static>>>
+) -> anyhow::Result<Vec<Line<'static>>>
 {
 	let syntax = syntax_set
 		.find_syntax_by_extension("rs")
@@ -36,11 +36,11 @@ pub fn highlight_message(
 			.iter()
 			.map(|(style, text)| {
 				let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-				Span::styled(text.to_string(), tui::style::Style::default().fg(fg))
+				Span::styled(text.to_string(), Style::default().fg(fg))
 			})
 			.collect();
 
-		result.push(Spans::from(spans));
+		result.push(Line::from(spans));
 	}
 
 	Ok(result)

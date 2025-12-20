@@ -6,6 +6,7 @@ pub fn spawn_cargo_build() -> anyhow::Result<(Child, BufReader<ChildStdout>)>
 	let mut child = Command::new("cargo")
 		.args(&["build", "--message-format=json"])
 		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
 		.spawn()?;
 
 	let stdout = child
@@ -19,7 +20,7 @@ pub fn spawn_cargo_build() -> anyhow::Result<(Child, BufReader<ChildStdout>)>
 
 pub fn parse_build_output(
 	reader: BufReader<ChildStdout>,
-	ignore_warnings: bool,
+	// ignore_warnings: bool,
 ) -> anyhow::Result<Vec<(String, String)>>
 {
 	let mut messages: Vec<(String, String)> = Vec::new();
@@ -42,10 +43,10 @@ pub fn parse_build_output(
 					.unwrap_or("error"); // default to error
 
 				// skip warnings
-				if ignore_warnings && level == "warning"
-				{
-					continue;
-				}
+				// if ignore_warnings && level == "warning"
+				// {
+				// 	continue;
+				// }
 
 				if let Some(rendered) = message.get("rendered").and_then(|r| r.as_str())
 				{
@@ -56,4 +57,38 @@ pub fn parse_build_output(
 	}
 
 	Ok(messages)
+}
+
+pub fn check_messages(messages: &Vec<(String, String)>) -> (usize, usize, usize)
+{
+	let warnings = messages
+		.iter()
+		.filter(|(level, _)| level == "warning")
+		.count();
+	let errors = messages
+		.iter()
+		.filter(|(level, _)| level == "error")
+		.count();
+	let others = messages.len() - warnings - errors;
+
+	(warnings, errors, others)
+}
+
+pub fn filter_messages(
+	messages: &Vec<(String, String)>,
+	ignore_warnings: bool,
+) -> Vec<(String, String)>
+{
+	if ignore_warnings
+	{
+		messages
+			.iter()
+			.filter(|(kind, _)| kind != "warning")
+			.map(|message| message.clone())
+			.collect()
+	}
+	else
+	{
+		messages.to_vec()
+	}
 }
