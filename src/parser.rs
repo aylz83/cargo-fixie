@@ -1,8 +1,25 @@
-use std::io::{BufRead, BufReader};
-use std::process::{Stdio, Child, ChildStdout, Command};
+use std::process::Stdio;
 
-pub fn spawn_cargo_build() -> anyhow::Result<(Child, BufReader<ChildStdout>)>
+use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::mpsc::{channel, Receiver};
+
+#[derive(Debug)]
+pub enum MessageEvent
 {
+	Message
+	{
+		level: String,
+		rendered: String,
+	},
+	Finished,
+	Failed(anyhow::Error),
+}
+
+pub async fn spawn_cargo_build() -> anyhow::Result<Receiver<MessageEvent>>
+{
+	let (tx, rx) = channel(128);
+
 	let mut child = Command::new("cargo")
 		.args(&["build", "--message-format=json"])
 		.stdout(Stdio::piped())
@@ -13,65 +30,64 @@ pub fn spawn_cargo_build() -> anyhow::Result<(Child, BufReader<ChildStdout>)>
 		.stdout
 		.take()
 		.ok_or(anyhow::anyhow!("Unable to obtain stdout"))?;
-	let reader = BufReader::new(stdout);
 
-	Ok((child, reader))
-}
+	let mut reader = BufReader::new(stdout).lines();
 
-pub fn parse_build_output(
-	reader: BufReader<ChildStdout>,
-	// ignore_warnings: bool,
-) -> anyhow::Result<Vec<(String, String)>>
-{
-	let mut messages: Vec<(String, String)> = Vec::new();
-
-	for line in reader.lines()
-	{
-		let line = line?;
-		if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line)
+	tokio::spawn(async move {
+		while let Ok(Some(line)) = reader.next_line().await
 		{
-			if msg.get("reason").and_then(|r| r.as_str()) != Some("compiler-message")
+			let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&line)
+			else
+			{
+				continue;
+			};
+
+			if json_data.get("reason").and_then(|r| r.as_str()) != Some("compiler-message")
 			{
 				continue;
 			}
 
-			if let Some(message) = msg.get("message")
+			let Some(message) = json_data.get("message")
+			else
 			{
-				let level = message
-					.get("level")
-					.and_then(|l| l.as_str())
-					.unwrap_or("error"); // default to error
+				continue;
+			};
 
-				// skip warnings
-				// if ignore_warnings && level == "warning"
-				// {
-				// 	continue;
-				// }
+			let level = message
+				.get("level")
+				.and_then(|l| l.as_str())
+				.unwrap_or("error");
 
-				if let Some(rendered) = message.get("rendered").and_then(|r| r.as_str())
+			if let Some(rendered) = message.get("rendered").and_then(|r| r.as_str())
+			{
+				if tx
+					.send(MessageEvent::Message {
+						level: level.to_string(),
+						rendered: rendered.to_string(),
+					})
+					.await
+					.is_err()
 				{
-					messages.push((level.to_string(), rendered.to_string()));
+					return;
 				}
 			}
 		}
-	}
 
-	Ok(messages)
-}
+		// Wait for cargo to exit
+		match child.wait().await
+		{
+			Ok(_) =>
+			{
+				let _ = tx.send(MessageEvent::Finished).await;
+			}
+			Err(e) =>
+			{
+				let _ = tx.send(MessageEvent::Failed(e.into())).await;
+			}
+		}
+	});
 
-pub fn check_messages(messages: &Vec<(String, String)>) -> (usize, usize, usize)
-{
-	let warnings = messages
-		.iter()
-		.filter(|(level, _)| level == "warning")
-		.count();
-	let errors = messages
-		.iter()
-		.filter(|(level, _)| level == "error")
-		.count();
-	let others = messages.len() - warnings - errors;
-
-	(warnings, errors, others)
+	Ok(rx)
 }
 
 pub fn filter_messages(

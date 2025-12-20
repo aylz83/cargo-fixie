@@ -4,12 +4,13 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Wrap, Block, Borders, Paragraph};
 use ratatui::text::{Line, Span};
 
-use crossterm::cursor::{Hide, Show};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode};
-use crossterm::event::{self, Event, KeyCode};
-use crossterm::execute;
+use ratatui::crossterm::ExecutableCommand;
+use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode};
+use ratatui::crossterm::event::{self, Event, KeyCode};
+// use crossterm::execute;
 
-use std::io::Stdout;
+use std::io::Stderr;
+use std::time::Duration;
 
 use syntect::parsing::SyntaxSet;
 use syntect::highlighting::ThemeSet;
@@ -25,18 +26,16 @@ pub enum Command
 	Quit,
 }
 
-pub fn setup_tui() -> anyhow::Result<(Terminal<CrosstermBackend<Stdout>>, SyntaxSet, ThemeSet)>
+pub fn setup_tui() -> anyhow::Result<(Terminal<CrosstermBackend<Stderr>>, SyntaxSet, ThemeSet)>
 {
-	let mut stdout = Box::new(std::io::stdout());
+	let mut stderr = Box::new(std::io::stderr());
 
 	enable_raw_mode()?;
 
-	execute!(stdout, EnterAlternateScreen, Hide)?;
+	stderr.execute(EnterAlternateScreen)?;
 
-	let backend = CrosstermBackend::new(*stdout);
-	let mut terminal = Terminal::new(backend)?;
-
-	terminal.clear()?;
+	let backend = CrosstermBackend::new(*stderr);
+	let terminal = Terminal::new(backend)?;
 
 	let syntax_set = SyntaxSet::load_defaults_newlines();
 	let theme_set = ThemeSet::load_defaults();
@@ -44,61 +43,89 @@ pub fn setup_tui() -> anyhow::Result<(Terminal<CrosstermBackend<Stdout>>, Syntax
 	Ok((terminal, syntax_set, theme_set))
 }
 
-pub fn cleanup_tui(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()>
+pub fn cleanup_tui() -> anyhow::Result<()>
 {
-	// terminal.clear()?;
 	disable_raw_mode()?;
 
-	execute!(terminal.backend_mut(), LeaveAlternateScreen, Show)?;
+	let mut stderr = Box::new(std::io::stderr());
 
-	terminal.show_cursor()?;
-	// terminal.clear()?;
-	terminal.flush()?;
+	stderr.execute(LeaveAlternateScreen)?;
 	Ok(())
 }
 
 pub fn control_tui(index: usize, total: usize) -> anyhow::Result<Command>
 {
-	if let Event::Key(key) = event::read()?
+	if event::poll(Duration::from_millis(50))?
 	{
-		Ok(match key.code
+		if let Event::Key(key) = event::read()?
 		{
-			KeyCode::Char('i') => Command::IgnoreWarnings,
-			KeyCode::Char('r') => Command::Rebuild,
-			KeyCode::Char('q') => Command::Quit,
-			KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') | KeyCode::Right =>
+			return Ok(match key.code
 			{
-				if index + 1 < total
+				KeyCode::Char('i') => Command::IgnoreWarnings,
+				KeyCode::Char('r') => Command::Rebuild,
+				KeyCode::Char('q') => Command::Quit,
+				KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') | KeyCode::Right =>
 				{
-					Command::SwitchError(index + 1)
+					if index + 1 < total
+					{
+						Command::SwitchError(index + 1)
+					}
+					else
+					{
+						Command::NoChange
+					}
 				}
-				else
+				KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') | KeyCode::Left =>
 				{
-					Command::NoChange
+					if index > 0
+					{
+						Command::SwitchError(index - 1)
+					}
+					else
+					{
+						Command::NoChange
+					}
 				}
-			}
-			KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') | KeyCode::Left =>
-			{
-				if index > 0
-				{
-					Command::SwitchError(index - 1)
-				}
-				else
-				{
-					Command::NoChange
-				}
-			}
-			_ => Command::NoChange,
-		})
+				_ => Command::NoChange,
+			});
+		}
 	}
-	else
-	{
-		Ok(Command::NoChange)
-	}
+
+	Ok(Command::NoChange)
+}
+
+pub fn render_building_screen(
+	terminal: &mut Terminal<CrosstermBackend<Stderr>>,
+) -> anyhow::Result<()>
+{
+	terminal.draw(|f| {
+		let area = f.area();
+		let p = Paragraph::new("Waiting for cargo build...")
+			.block(Block::default().borders(Borders::ALL).title("fixie"));
+
+		f.render_widget(p, area);
+	})?;
+
+	Ok(())
+}
+
+pub fn render_no_messages_screen(
+	terminal: &mut Terminal<CrosstermBackend<Stderr>>,
+) -> anyhow::Result<()>
+{
+	terminal.draw(|f| {
+		let area = f.area();
+		let p = Paragraph::new("Build finished with no warnings or errors")
+			.block(Block::default().borders(Borders::ALL).title("fixie"));
+
+		f.render_widget(p, area);
+	})?;
+
+	Ok(())
 }
 
 pub fn render_message(
-	terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+	terminal: &mut Terminal<CrosstermBackend<Stderr>>,
 	syntax_set: &SyntaxSet,
 	theme_set: &ThemeSet,
 	theme: &String,
@@ -121,9 +148,9 @@ pub fn render_message(
 			Span::styled(format!("OTH {} ", others), Style::default().fg(Color::Blue)),
 			Span::raw(format!(
 				" Ignore warnings: {} ",
-				if ignore_warnings { "ON" } else { "OFF" }
+				if ignore_warnings { "ON " } else { "OFF" }
 			)),
-			Span::raw("h/← l/→ : navigate | i : toggle warnings | r : rebuild | q : quit"),
+			Span::raw("| h/← l/→ : navigate | i : toggle warnings | r : rebuild | q : quit"),
 		]);
 
 		let area = f.area();

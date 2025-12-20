@@ -9,91 +9,129 @@ use ui::*;
 
 use clap::Parser;
 
-fn main() -> anyhow::Result<()>
+#[tokio::main]
+async fn main() -> anyhow::Result<()>
 {
 	let Cli::Fixie(cli) = Cli::parse();
 
-	let (mut child, reader) = spawn_cargo_build()?;
-
 	let mut ignore_warnings = cli.ignore_warnings;
-
-	let mut messages = parse_build_output(reader)?;
-	let mut filtered_messages = filter_messages(&messages, ignore_warnings);
-
-	let (mut warnings, mut errors, mut others) = check_messages(&messages);
-
-	child.wait()?;
-
-	if messages.is_empty()
-	{
-		return Ok(());
-	}
 
 	let mut index = 0;
 
 	let (mut terminal, syntax_set, theme_set) = setup_tui()?;
+	let mut build_rx = spawn_cargo_build().await?;
+
+	let mut messages = Vec::new();
+	let mut filtered_messages = Vec::new();
+
+	let mut warnings = 0;
+	let mut errors = 0;
+	let mut others = 0;
+
+	let mut building = true;
 
 	loop
 	{
-		let message = &filtered_messages[index];
-		render_message(
-			&mut terminal,
-			&syntax_set,
-			&theme_set,
-			&cli.theme,
-			message,
-			index,
-			filtered_messages.len(),
-			warnings,
-			errors,
-			others,
-			ignore_warnings,
-		)?;
+		while let Ok(event) = build_rx.try_recv()
+		{
+			match event
+			{
+				MessageEvent::Message { level, rendered } if building =>
+				{
+					match level.as_str()
+					{
+						"warning" => warnings += 1,
+						"error" => errors += 1,
+						_ => others += 1,
+					}
+
+					messages.push((level, rendered));
+				}
+
+				MessageEvent::Finished =>
+				{
+					filtered_messages = filter_messages(&messages, ignore_warnings);
+					building = false;
+					index = 0;
+				}
+
+				MessageEvent::Failed(err) =>
+				{
+					cleanup_tui()?;
+					return Err(err);
+				}
+
+				_ =>
+				{}
+			}
+		}
+
+		if building
+		{
+			render_building_screen(&mut terminal)?;
+		}
+		else if filtered_messages.is_empty()
+		{
+			render_no_messages_screen(&mut terminal)?;
+		}
+		else
+		{
+			if index >= filtered_messages.len()
+			{
+				index = 0;
+			}
+
+			render_message(
+				&mut terminal,
+				&syntax_set,
+				&theme_set,
+				&cli.theme,
+				&filtered_messages[index],
+				index,
+				filtered_messages.len(),
+				warnings,
+				errors,
+				others,
+				ignore_warnings,
+			)?;
+		}
 
 		match control_tui(index, filtered_messages.len())
 		{
-			Ok(Command::SwitchError(new_index)) => index = new_index,
-			Ok(Command::Quit) => break,
-			Ok(Command::IgnoreWarnings) =>
+			Ok(Command::SwitchError(new_index)) if !building =>
+			{
+				index = new_index;
+			}
+
+			Ok(Command::IgnoreWarnings) if !building =>
 			{
 				index = 0;
 				ignore_warnings = !ignore_warnings;
 				filtered_messages = filter_messages(&messages, ignore_warnings);
-
-				if filtered_messages.is_empty()
-				{
-					break;
-				}
 			}
+
 			Ok(Command::Rebuild) =>
 			{
 				index = 0;
-				let (mut new_child, new_reader) = spawn_cargo_build()?;
-				messages = parse_build_output(new_reader)?;
-				filtered_messages = filter_messages(&messages, ignore_warnings);
-				let (new_warnings, new_errors, new_others) = check_messages(&messages);
+				messages.clear();
+				filtered_messages.clear();
+				warnings = 0;
+				errors = 0;
+				others = 0;
+				building = true;
 
-				new_child.wait()?;
-				child = new_child;
-
-				warnings = new_warnings;
-				errors = new_errors;
-				others = new_others;
-
-				if filtered_messages.is_empty()
-				{
-					break;
-				}
+				build_rx = spawn_cargo_build().await?;
 			}
-			Ok(Command::NoChange) =>
+
+			Ok(Command::Quit) => break,
+			_ =>
 			{}
-			Err(_) => break,
 		}
+
+		tokio::task::yield_now().await;
 	}
 
-	child.wait()?;
-
-	cleanup_tui(&mut terminal)?;
+	cleanup_tui()?;
 
 	Ok(())
 }
