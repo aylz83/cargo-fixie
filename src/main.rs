@@ -28,6 +28,7 @@ async fn main() -> anyhow::Result<()>
 	let mut errors = 0;
 	let mut others = 0;
 
+	let mut building_index = 0;
 	let mut building = true;
 
 	loop
@@ -68,11 +69,25 @@ async fn main() -> anyhow::Result<()>
 
 		if building
 		{
-			render_building_screen(&mut terminal)?;
+			let spinner_char = SPINNER_FRAMES[building_index];
+
+			render_plain_message(
+				&mut terminal,
+				format!("{} Waiting for cargo build...", spinner_char).to_string(),
+				Some((warnings, errors, others)),
+				ignore_warnings,
+			)?;
+
+			building_index = (building_index + 1) % SPINNER_FRAMES.len();
 		}
 		else if filtered_messages.is_empty()
 		{
-			render_no_messages_screen(&mut terminal)?;
+			render_plain_message(
+				&mut terminal,
+				"Build finished with no warnings or errors".to_string(),
+				None,
+				ignore_warnings,
+			)?;
 		}
 		else
 		{
@@ -119,6 +134,7 @@ async fn main() -> anyhow::Result<()>
 				errors = 0;
 				others = 0;
 				building = true;
+				building_index = 0;
 
 				build_rx = spawn_cargo_build().await?;
 			}

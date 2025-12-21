@@ -17,6 +17,8 @@ use syntect::highlighting::ThemeSet;
 
 use crate::highlighting::highlight_message;
 
+pub const SPINNER_FRAMES: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
+
 pub enum Command
 {
 	SwitchError(usize),
@@ -94,29 +96,61 @@ pub fn control_tui(index: usize, total: usize) -> anyhow::Result<Command>
 	Ok(Command::NoChange)
 }
 
-pub fn render_building_screen(
+pub fn render_plain_message(
 	terminal: &mut Terminal<CrosstermBackend<Stderr>>,
+	message: String,
+	extras: Option<(usize, usize, usize)>,
+	ignore_warnings: bool,
 ) -> anyhow::Result<()>
 {
 	terminal.draw(|f| {
+		let (bottom_line, border_colour) = match extras
+		{
+			Some((warnings, errors, others)) =>
+			{
+				let line = Line::from(vec![
+					Span::styled(
+						format!("WARN {} ", warnings),
+						Style::default().fg(Color::Yellow),
+					),
+					Span::styled(format!("ERR {} ", errors), Style::default().fg(Color::Red)),
+					Span::styled(format!("OTH {} ", others), Style::default().fg(Color::Blue)),
+					Span::raw(format!(
+						" | Ignore warnings: {} ",
+						if ignore_warnings { "ON " } else { "OFF" }
+					)),
+					Span::raw(
+						"| h/← l/→ : navigate | i : toggle warnings | r : rebuild | q : quit",
+					),
+				]);
+
+				(line, Color::Gray)
+			}
+			None =>
+			{
+				let line = Line::from(vec![
+					Span::styled("WARN 0 ", Style::default().fg(Color::Yellow)),
+					Span::styled("ERR 0 ", Style::default().fg(Color::Red)),
+					Span::styled("OTH 0 ", Style::default().fg(Color::Blue)),
+					Span::raw(format!(
+						" | Ignore warnings: {} ",
+						if ignore_warnings { "ON " } else { "OFF" }
+					)),
+					Span::raw("h/← l/→ : navigate | i : toggle warnings | r : rebuild | q : quit"),
+				]);
+
+				(line, Color::Green)
+			}
+		};
+
 		let area = f.area();
-		let p = Paragraph::new("Waiting for cargo build...")
-			.block(Block::default().borders(Borders::ALL).title("fixie"));
-
-		f.render_widget(p, area);
-	})?;
-
-	Ok(())
-}
-
-pub fn render_no_messages_screen(
-	terminal: &mut Terminal<CrosstermBackend<Stderr>>,
-) -> anyhow::Result<()>
-{
-	terminal.draw(|f| {
-		let area = f.area();
-		let p = Paragraph::new("Build finished with no warnings or errors")
-			.block(Block::default().borders(Borders::ALL).title("fixie"));
+		let p = Paragraph::new(message).block(
+			Block::default()
+				.borders(Borders::ALL)
+				.title("fixie")
+				.title_bottom(bottom_line)
+				.border_style(Style::default().fg(border_colour)),
+		);
 
 		f.render_widget(p, area);
 	})?;
@@ -147,7 +181,7 @@ pub fn render_message(
 			Span::styled(format!("ERR {} ", errors), Style::default().fg(Color::Red)),
 			Span::styled(format!("OTH {} ", others), Style::default().fg(Color::Blue)),
 			Span::raw(format!(
-				" Ignore warnings: {} ",
+				" | Ignore warnings: {} ",
 				if ignore_warnings { "ON " } else { "OFF" }
 			)),
 			Span::raw("| h/← l/→ : navigate | i : toggle warnings | r : rebuild | q : quit"),
@@ -156,8 +190,7 @@ pub fn render_message(
 		let area = f.area();
 		let (level, text) = message;
 
-		// Determine styles
-		let (border_color, title) = match level.as_str()
+		let (border_colour, title) = match level.as_str()
 		{
 			"warning" => (Color::Yellow, "WARNING"),
 			"error" => (Color::Red, "  ERROR"),
@@ -168,7 +201,7 @@ pub fn render_message(
 			.title(format!("{} [{}/{}]", title, index + 1, total))
 			.title_bottom(bottom_line)
 			.borders(Borders::ALL)
-			.border_style(Style::default().fg(border_color));
+			.border_style(Style::default().fg(border_colour));
 
 		let highlighted = match highlight_message(&text, &syntax_set, &theme_set, theme)
 		{
